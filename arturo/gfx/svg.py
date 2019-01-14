@@ -3,12 +3,10 @@ from collections import namedtuple
 
 import svgwrite
 
-from arturo.gfx.canvas import TILE, POLY
-
 Size = namedtuple("Size", "w h")
-SIZE = Size(2.75, 4.75)
-DPI = 600
-SCALE_FACTOR = 1.0
+
+DEFAULT_SCALE = 1
+DEFAULT_SCALE_FACTOR = 1.0
 
 def fmt_unit(value, unit):
     return "{}{}".format(value, unit)
@@ -16,23 +14,31 @@ def fmt_unit(value, unit):
 def fmt_size(size, unit):
     return fmt_unit(size.w, unit), fmt_unit(size.h, unit)
 
-DrawContext = namedtuple("DrawContext", "dwg x y")
+Canvas = namedtuple("Canvas", "width height dpi scale_factor")
+DrawContext = namedtuple("DrawContext", "dwg canvas x y")
 
 def draw(ctx, instruction):
+    """
+    Each primitive instruction maps directly to a function with keyword
+    arguments corresponding to specified property names.
+    """
+    # curry for polygon aliases
+    def poly(n):
+        return lambda ctx, *a, **k: _draw_poly(ctx, n, *a, **k)
+
     fns = {
-        TILE: tile,
-        POLY: poly,
+        "tile": _draw_tile,
+        "triangle": poly(3),
     }
 
-    (name, *args) = instruction
-    return fns[name](ctx, *args)
+    return fns[instruction.name](ctx, *instruction.args, **instruction.kwargs)
 
-def tile(ctx, children):
+def _draw_tile(ctx, children):
     # TODO: draw all children, repeat
     draw(ctx, children[0])
 
-def poly(ctx, vertex_count, scale):
-    radius = scale * DPI / SCALE_FACTOR
+def _draw_poly(ctx, vertex_count, scale=DEFAULT_SCALE):
+    radius = scale * ctx.canvas.dpi / ctx.canvas.scale_factor
     angle = math.pi / vertex_count
     offset = radius
 
@@ -47,13 +53,18 @@ def poly(ctx, vertex_count, scale):
     element = ctx.dwg.polygon(points)
     ctx.dwg.add(element)
 
-def output(canvas, path):
-    dwg = svgwrite.Drawing(path, size=fmt_size(SIZE, "in"), debug=True)
+def output(script, stream):
+    canvas = dict(script.meta["canvas"])
+    canvas.setdefault("scale_factor", DEFAULT_SCALE_FACTOR)
+    canvas = Canvas(**canvas)
+
+    size = Size(canvas.width, canvas.height)
+    dwg = svgwrite.Drawing(size=fmt_size(size, "in"), debug=True)
 
     # set user coordinate space
-    dwg.viewbox(width=SIZE.w * DPI, height=SIZE.h * DPI)
+    dwg.viewbox(width=size.w * canvas.dpi, height=size.h * canvas.dpi)
 
-    ctx = DrawContext(dwg, 0, 0)
-    draw(ctx, canvas)
+    ctx = DrawContext(dwg, canvas, 0, 0)
+    draw(ctx, script.layout)
 
-    dwg.save()
+    dwg.write(stream)
