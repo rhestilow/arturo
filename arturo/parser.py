@@ -5,16 +5,6 @@ import arturo.ast as ast
 
 def _parse_layout_element(element):
     """
-    Layout elements can either be strings or single-element dicts with
-    property dicts nested underneath:
-
-    - element
-
-    or
-
-    - element:
-            property: here
-            another: etc
     """
     if element in ast.PRIMITIVES:
         return ast.Instruction(element, args=[], kwargs={})
@@ -22,51 +12,49 @@ def _parse_layout_element(element):
         (name, kwargs) = element.items()[0]
         return ast.Instruction(name, args=[], kwargs=kwargs)
 
-def _parse_layout(name, body):
+def _parse_instruction(node):
     """
-    A layout is just a layout name with a list of elements under it.
+    Each instruction has a name, args, and kwargs.
 
-    layout:
-        - element
-        - element
+    An instruction can be simply a string, in which case args and kwargs are empty:
 
-    You can also specify properties for the layout, in which case the
-    list of elements must be qualified with `do`:
+    instruction_name
 
-    layout:
-        style: fancy
+    Or it can be a single-element dict with a list under it, in which case kwargs is empty:
+
+    instruction_name:
+        - arg0
+        - arg1
+
+    Or it can be a single-element dict with another dict under it. In that case,
+    the args are specified by the `do` keyword:
+
+    instruction_name:
+        kwarg0: "value0"
+        kwarg1: "value1"
         do:
-            - element
-            - another
-            - etc
-
-    Currently layouts are toplevel only, and only one may be specified.
+            - arg0
+            - arg1
+            - arg2
     """
+    if isinstance(node, collections.abc.Mapping):
+        # TODO: error out if not single element dict
+        name, body = list(node.items())[0]
+    else:
+        name = node
+        body = []
+
     if isinstance(body, collections.abc.Mapping):
         properties = dict(body)
-        elements = body.pop("do")
+        elements = properties.pop("do")
     else:
         properties = {}
         elements = body
 
-    children = [ _parse_layout_element(element) for element in elements ]
-    return ast.Instruction(name, args=[ children ], kwargs=properties)
+    children = [ _parse_instruction(element) for element in elements ]
+    return ast.Instruction(name, args=children, kwargs=properties)
 
 def parse(stream):
     tree = yaml.load(stream)
 
-    meta = {}
-    layout = None
-
-    for (toplevel, value) in tree.items():
-        if toplevel in ast.META:
-            meta[toplevel] = value
-        elif toplevel in ast.LAYOUTS:
-            if layout:
-                raise ParseError("Only one layout may be specified")
-
-            layout = _parse_layout(toplevel, value)
-        else:
-            raise ParseError("Unknown toplevel: {}".format(toplevel))
-
-    return ast.Script(meta, layout)
+    return _parse_instruction({ast.ROOT: tree})
